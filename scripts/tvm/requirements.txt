@@ -1,0 +1,3 @@
+numpy==2.0.1
+pyvoro
+networkx==3.3
