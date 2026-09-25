@@ -535,5 +535,7 @@ class Sample:
                 file.write(f"{cell.id_:d}")
                 for polygonID in cell.polygons_:
                     file.write(f" {polygonID:6d}")
+                if self.tissueType_ == "spheroid":
+                    file.write(f" {cell.type_:d}")
                 file.write("\n")
 

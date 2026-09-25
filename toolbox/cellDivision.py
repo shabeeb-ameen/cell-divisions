@@ -5,95 +5,7 @@ from toolbox import functions
 from toolbox import shape
 from toolbox import topology
 
-def dumpVtk(sample:tissue.Sample):
-    vertexMap = functions.mapmaker(sample.vertices_)
-    with open(sample.config_dir_
-                + "{:07d}.modifiedSample.vtk".format(sample.time_),'w') as file:
-        
-        file.write("# vtk DataFile Version 2.0\n")
-        file.write("polydata\n")
-        file.write("ASCII\n")
-        file.write("DATASET POLYDATA\n")
-        file.write("POINTS {} double\n".format(len(sample.vertices_)))
-        for vertexID, vertex in sample.vertices_.items():
-            file.write("{:12.5e} {:12.5e} {:12.5e}\n".format(
-                vertex.position_[0],
-                vertex.position_[1],
-                vertex.position_[2]))
-        totalPolygonDataPoints = 0
-        totalPolygons = 0
-        for polygonID,polygon in sample.polygons_.items():
-            if not polygon.crossBoundary_:
-                totalPolygons += 1
-                totalPolygonDataPoints += len(polygon.vertices_) + 1
-
-           
-        file.write("POLYGONS {} {}\n".format(totalPolygons,
-                                                totalPolygonDataPoints))
-    
-
-        for polygonID, polygon in sample.polygons_.items():
-            if not polygon.crossBoundary_: 
-                file.write("{:<7d}".format(len(polygon.vertices_)))
-                for vID in polygon.vertices_: 
-                    file.write("{:<7d}".format(vertexMap[vID]))
-                file.write("\n")
-
-        file.write("CELL_DATA {}\n".format(totalPolygons))
-        file.write("SCALARS shapeIndex double\n")
-        file.write("LOOKUP_TABLE default\n")
-        for polygonID, polygon in sample.polygons_.items():
-            if not polygon.crossBoundary_:
-                for cellID, cell in sample.cells_.items():
-                    if polygonID in cell.polygons_:
-                        file.write("{:<12.6f}\n".format(cell.shape_index_))
-                        break
-    return
-    
-def dumpCellVtk(sample:tissue.Sample, cellID:int):
-    cell = sample.cells_[cellID]
-    tmp_vertices = {}
-    tmp_polygons = {polygonID:sample.polygons_[polygonID] for polygonID in cell.polygons_}
-    for _, polygon in tmp_polygons.items():
-        for vertexID in polygon.vertices_:
-            tmp_vertices[vertexID] = sample.vertices_[vertexID]
-    vertexMap = functions.mapmaker(tmp_vertices)
-    with open(
-        sample.config_dir_
-        + "{:07d}.cell{:03d}.vtk".format(sample.time_, cell.id_),'w') as file:
-        
-        file.write("# vtk DataFile Version 2.0\n")
-        file.write("polydata\n")
-        file.write("ASCII\n")
-        file.write("DATASET POLYDATA\n")
-        file.write("POINTS {} double\n".format(len(tmp_vertices)))
-        for vertexID, vertex in tmp_vertices.items():
-            file.write("{:12.5e} {:12.5e} {:12.5e}\n".format(
-                vertex.position_[0],
-                vertex.position_[1],
-                vertex.position_[2]))
-        totalPolygonDataPoints = 0
-        totalPolygons = 0
-        for polygonID,polygon in tmp_polygons.items():
-            totalPolygons += 1
-            totalPolygonDataPoints += len(polygon.vertices_) + 1
-        file.write("POLYGONS {} {}\n".format(totalPolygons,
-                                                totalPolygonDataPoints))
-        for polygonID, polygon in tmp_polygons.items():
-            file.write("{:<7d}".format(len(polygon.vertices_)))
-            for vID in polygon.vertices_: 
-                file.write("{:<7d}".format(vertexMap[vID]))
-            file.write("\n")
-    return
-
-def calculateElongationAxis(sample:tissue.Sample, cellID:int):
-    inertia_tensor = shape.calculate_moment_of_inertia_tensor(sample,cellID)
-    eigenvalues, eigenvectors = np.linalg.eigh(inertia_tensor)
-    N = eigenvectors[:, np.argmin(eigenvalues)]
-    return N
-
-
-def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
+def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int, division_axis:list):
     cell = sample.cells_[cellID]
     newVertices = {}
     newEdges = {}
@@ -102,15 +14,13 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
     motherEdgeIDToDaughterEdgeIDs = {}
     motherPolygonIDToDaughterPolygonIDs = {}
 
-    N = calculateElongationAxis(sample,cell.id_)
-
     # Identify mother edges and mother polygons. Create intersection vertices on mother edges.
     for polygonID in cell.polygons_:
         for edgeID in sample.polygons_[polygonID].edges_:
             edge = sample.edges_[edgeID]
             v0 = sample.vertices_[edge.vertices_[0]].position_
             v1 = sample.vertices_[edge.vertices_[1]].position_
-            t = np.dot(np.subtract(cell.center_,v0),N)/np.dot(np.subtract(v1,v0),N)
+            t = np.dot(np.subtract(cell.center_,v0),division_axis)/np.dot(np.subtract(v1,v0),division_axis)
             if t>0 and t<1:
                 sample.polygons_[polygonID].is_mother_ = True
                 if not polygonID in motherPolygonIDToDaughterPolygonIDs:
@@ -192,12 +102,12 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
                 if np.dot(
                     np.subtract(
                         sample.vertices_[edge.vertices_[0]].position_,cell.center_),
-                        N) > 0:
+                        division_axis) > 0:
                     newDaughterPolygon1.addEdge(edgeID)
                 elif np.dot(
                     np.subtract(
                         sample.vertices_[edge.vertices_[0]].position_,cell.center_),
-                        N) < 0:
+                        division_axis) < 0:
                     newDaughterPolygon2.addEdge(edgeID)
                 else: 
                     print("Error: The non intersecting vertex of the daughter edge is on the dividing plane.")
@@ -208,12 +118,12 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
                 if np.dot(
                     np.subtract(
                         sample.vertices_[sample.edges_[edgeID].vertices_[0]].position_,cell.center_),
-                        N) > 0:
+                        division_axis) > 0:
                     newDaughterPolygon1.addEdge(edgeID)
                 elif np.dot(
                     np.subtract(
                         sample.vertices_[sample.edges_[edgeID].vertices_[0]].position_,cell.center_),
-                        N) < 0:
+                        division_axis) < 0:
                     newDaughterPolygon2.addEdge(edgeID)
                 else: 
                     print("Error: One of the edge vertices in the mother polygon is on the dividing plane.")
@@ -227,12 +137,14 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
                 tmp_vertices.append(newEdges[edgeID].vertices_)
             if edgeID in sample.edges_:
                 tmp_vertices.append(sample.edges_[edgeID].vertices_)
-        polygon.vertices_ = functions.arrange_polygon(tmp_vertices)
+        polygon.vertices_ = sample.resolve_polygon_edge_connectivity(tmp_vertices)
 
     # two new daughter cells.
     newDaughterCell1 = topology.Cell(id=np.max(list(sample.cells_.keys()))+1)
     newDaughterCell2 = topology.Cell(id=np.max(list(sample.cells_.keys()))+2)
-
+    if cell.type_:
+        newDaughterCell1.type_ = 1
+        newDaughterCell2.type_ = 1
     for polygonID,polygon in newPolygons.items():
         # Add the dividing polygon to both daughter cells.
         if polygon.is_dividing_polygon_:
@@ -244,11 +156,11 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
             if vertexID in newVertices:
                 if newVertices[vertexID].is_daughter_:
                     continue
-                signSet.add(np.sign(np.dot(np.subtract(newVertices[vertexID].position_,cell.center_),N)))
+                signSet.add(np.sign(np.dot(np.subtract(newVertices[vertexID].position_,cell.center_),division_axis)))
             elif vertexID in sample.vertices_:
                 if sample.vertices_[vertexID].is_daughter_:
                     continue
-                signSet.add(np.sign(np.dot(np.subtract(sample.vertices_[vertexID].position_,cell.center_),N)))
+                signSet.add(np.sign(np.dot(np.subtract(sample.vertices_[vertexID].position_,cell.center_),division_axis)))
         if len(signSet) > 1:
             print("Error: The polygon has vertices on both sides of the dividing plane.")
         elif len(signSet) == 1:
@@ -265,11 +177,11 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
                 if vertexID in newVertices:
                     if newVertices[vertexID].is_daughter_:
                         continue
-                    signSet.add(np.sign(np.dot(np.subtract(newVertices[vertexID].position_,cell.center_),N)))
+                    signSet.add(np.sign(np.dot(np.subtract(newVertices[vertexID].position_,cell.center_),division_axis)))
                 elif vertexID in sample.vertices_:
                     if sample.vertices_[vertexID].is_daughter_:
                         continue
-                    signSet.add(np.sign(np.dot(np.subtract(sample.vertices_[vertexID].position_,cell.center_),N)))
+                    signSet.add(np.sign(np.dot(np.subtract(sample.vertices_[vertexID].position_,cell.center_),division_axis)))
             if len(signSet) > 1:
                 print("Error: The polygon has vertices on both sides of the dividing plane.")
             elif len(signSet) == 1:
@@ -281,7 +193,7 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
     newCells[newDaughterCell1.id_] = newDaughterCell1
     newCells[newDaughterCell2.id_] = newDaughterCell2
 
-    # update the topology in samples
+    # update the topology in the sample.
 
     sample.vertices_.update(newVertices)
     sample.edges_.update(newEdges)
@@ -303,7 +215,7 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
             for edgeID in polygon.edges_:
                 if edgeID in sample.edges_:
                     tmp_vertices.append(sample.edges_[edgeID].vertices_)
-            polygon.vertices_ = functions.arrange_polygon(tmp_vertices)
+            polygon.vertices_ = sample.resolve_polygon_edge_connectivity(tmp_vertices)
     sample.cells_.update(newCells)
     del sample.cells_[cell.id_]
     for cellID,cell in sample.cells_.items():
@@ -313,55 +225,9 @@ def evaluatePostDivisionTopology(sample:tissue.Sample, cellID:int):
                 for daughterPolygonID in motherPolygonIDToDaughterPolygonIDs[polygonID]:
                     cell.addPolygon(daughterPolygonID)
     print("Daughter cell IDs: ", newDaughterCell1.id_, newDaughterCell2.id_)
-    dumpCellVtk(sample, newDaughterCell1.id_)
-    dumpCellVtk(sample, newDaughterCell2.id_)
+    # dumpCellVtk(sample, newDaughterCell1.id_)
+    # dumpCellVtk(sample, newDaughterCell2.id_)
 
-    return sample
+    return sample, [newDaughterCell1.id_, newDaughterCell2.id_]
 
-def dumpSample(sample):
-    with open("sample.topo", "w") as file:
-        file.write("vertices {:d}\n".format(len(sample.vertices_)))
-        for key, vertex in sample.vertices_.items():
-            id = vertex.id_
-            x = vertex.position_[0]
-            y = vertex.position_[1]
-            z = vertex.position_[2]
-            file.write("{:6d} {:12.5e} {:12.5e} {:12.5e}\n".format(id, x, y, z))
-        file.write("edges {:d}\n".format(len(sample.edges_)))
 
-        for key, edge in sample.edges_.items():
-            file.write("{:d}".format(edge.id_))
-            for vertexID in edge.vertices_:
-                file.write(" {:6d}".format(vertexID))
-            file.write("\n")
-        
-        file.write("polygons {:d}\n".format(len(sample.polygons_)))
-        for key,polygon in sample.polygons_.items():
-            file.write("{:d}".format(polygon.id_))
-            for edgeID in polygon.edges_:
-                file.write(" {:6d}".format(edgeID))
-            file.write("\n")
-
-        file.write("cells {:d}\n".format(len(sample.cells_)))
-        for key,cell in sample.cells_.items():
-            file.write("{:d}".format(cell.id_))
-            for polygonID in cell.polygons_:
-                file.write(" {:6d}".format(polygonID))
-            file.write("\n")
-    return
-
-def main():
-    sample = tissue.Sample(configDir = "samples/", simulationTime = 500, tissueType = "periodic")
-    crossBoundary = True
-    while crossBoundary:
-        cellID = random.choice(list(sample.cells_.keys()))
-        crossBoundary = sample.cells_[cellID].crossBoundary_
-    sample.cells_[cellID].is_mother_ = True
-    print("Mother cell ID: ", cellID)
-    dumpCellVtk(sample, cellID)
-    sample = evaluatePostDivisionTopology(sample, cellID)
-    dumpSample(sample)
-    return
-
-# if __name__ == "__main__":
-#     main()
